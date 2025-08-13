@@ -68,6 +68,15 @@ def gsheet_to_df(ws) -> pd.DataFrame:
         df["accompagnants"] = pd.to_numeric(df["accompagnants"], errors="coerce").fillna(0).astype(int)
     return df
 
+def nom_prenom_deja_inscrit(ws, nom: str, prenom: str) -> bool:
+    df = gsheet_to_df(ws)
+    if df.empty or not {"nom", "prenom"}.issubset(df.columns):
+        return False
+    n = (nom or "").strip().lower()
+    p = (prenom or "").strip().lower()
+    return ((df["nom"].astype(str).str.strip().str.lower() == n) &
+            (df["prenom"].astype(str).str.strip().str.lower() == p)).any()
+
 # Append one inscription (values must follow HEADERS order)
 def append_inscription(ws, data: dict):
     row = [data.get("nom",""), data.get("prenom",""), data.get("email",""),
@@ -168,6 +177,11 @@ with tab_inscription:
         if submitted:
             if not nom.strip() or not prenom.strip() or not email.strip():
                 st.warning("Merci de remplir tous les champs obligatoires (*).")
+                st.stop()
+
+            # Blocage des doublons par Nom + Prénom
+            if nom_prenom_deja_inscrit(WS, nom, prenom):
+                st.warning("Cette personne est déjà inscrite. Si vous devez modifier votre inscription, contactez l’organisateur.")
                 st.stop()
 
             # Recalcul juste avant écriture pour éviter contention
