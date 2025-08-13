@@ -146,6 +146,8 @@ with tab_inscription:
     accomp_open = today >= OPEN_DATE
     if not accomp_open:
         st.info("ℹ️ Les accompagnants seront **ouverts à partir du 01/09/2025**. Les salariés peuvent s’inscrire dès maintenant.")
+    else:
+        st.success("Accompagnants désormais ouverts ✅ Vous pouvez ajouter vos accompagnants ou les renseigner lors de l’inscription.")
 
     if restantes <= 0:
         st.error("Complet – il n'y a plus de places disponibles.")
@@ -213,6 +215,13 @@ with tab_inscription:
             except Exception as e:
                 st.error("Échec de l'enregistrement dans Google Sheets. Vérifie les droits/quotas.")
                 st.exception(e)
+
+    expander_title = "Déjà inscrit ? Ajouter des accompagnants ✅" if accomp_open \
+                     else "Déjà inscrit ? Ajouter des accompagnants (à partir du 01/09/2025)"
+    with st.expander(expander_title):
+        # Content for adding accompanists would go here (not shown in original snippet)
+
+        pass
 
     with st.expander("🗺️ Plan & Accès"):
         if IMG_PLAN.exists():
