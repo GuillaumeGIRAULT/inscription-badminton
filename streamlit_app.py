@@ -2,7 +2,14 @@ from datetime import datetime, date
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+
 import gspread
+
+# --- Optional: auto-refresh helper ---
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
 
 # ------------------ Config ------------------
 MAX_PLACES = 50
@@ -89,6 +96,17 @@ st.set_page_config(page_title="Inscription Badminton", page_icon="🏸", layout=
 
 st.title("🏸 Matinée Badminton – Inscription")
 
+# --- Auto-refresh (15s), can be disabled from the sidebar ---
+AUTO_REFRESH_MS = 15000
+with st.sidebar:
+    auto = st.toggle("Actualisation auto (15 s)", value=True)
+if auto:
+    if st_autorefresh:
+        st_autorefresh(interval=AUTO_REFRESH_MS, key="auto_refresh_key")
+    else:
+        # Fallback without extra dependency (simple meta refresh)
+        st.markdown("<meta http-equiv='refresh' content='15'>", unsafe_allow_html=True)
+
 colL, colR = st.columns([2,1])
 with colL:
     st.markdown(
@@ -111,6 +129,21 @@ except Exception as e:
 tab_inscription, tab_admin = st.tabs(["📝 S'inscrire", "🔐 Admin"])
 
 with tab_inscription:
+    # Auth simple pour l'inscription
+    if "inscription_ok" not in st.session_state:
+        st.session_state.inscription_ok = False
+
+    if not st.session_state.inscription_ok:
+        with st.form("login_inscription", border=True):
+            pwd_insc = st.text_input("Mot de passe pour accéder à l'inscription", type="password")
+            ok_insc = st.form_submit_button("Valider")
+        if ok_insc:
+            if pwd_insc == "LaboratoireBIOLBS2025":
+                st.session_state.inscription_ok = True
+                st.rerun()
+            else:
+                st.error("Mot de passe incorrect.")
+        st.stop()
     total, restantes = get_places_stats(WS)
     st.markdown(f"**Places restantes : {restantes}**  _(capacité totale {MAX_PLACES})_")
     pct = int(100 * (MAX_PLACES - restantes) / MAX_PLACES)
