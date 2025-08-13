@@ -1,72 +1,91 @@
-# streamlit_app.py
-import sqlite3
+# streamlit_app.py — Google Sheets version
 from datetime import datetime
+from pathlib import Path
 import pandas as pd
 import streamlit as st
-from pathlib import Path
+import gspread
 
-DB_FILE = "inscriptions.db"
+# ------------------ Config ------------------
 MAX_PLACES = 50
-
 LABS = ["Ma1","Ma2","Bo","ÇA","IS","DE","BS","YS","CL","DA","ME","SH","AM","EU","SS","FL","QG"]
 STATIC_DIR = Path("static")
 IMG_FORM = STATIC_DIR / "badmington.jpg"
 IMG_PLAN = STATIC_DIR / "plan.png"
 IMG_ACCES = STATIC_DIR / "acces.png"
 
-ADMIN_PASSWORD = "admin123"  # à changer
+# Admin password: can be overridden via Streamlit Secrets
+ADMIN_PASSWORD = st.secrets.get("admin_password", "admin123")
 
-# ------------------ DB ------------------
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS inscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT NOT NULL,
-            prenom TEXT NOT NULL,
-            email TEXT NOT NULL,
-            laboratoire TEXT,
-            accompagnants INTEGER,
-            commentaire TEXT,
-            created_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+# Google Sheets configuration via Secrets
+# In Streamlit Cloud → Settings → Secrets, define:
+# [gcp_service_account]
+# ... (full JSON key)
+# [gsheet]
+# spreadsheet_name = "Inscriptions Badminton"
+# worksheet_title = "Feuille 1"
+SHEET_NAME = st.secrets.get("gsheet", {}).get("spreadsheet_name", "Inscriptions Badminton")
+WORKSHEET_TITLE = st.secrets.get("gsheet", {}).get("worksheet_title", None)  # default: first sheet
 
-def get_places_stats():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*), COALESCE(SUM(accompagnants),0) FROM inscriptions")
-    count_inscrits, sum_accomp = c.fetchone()
-    conn.close()
-    total = (count_inscrits or 0) + (sum_accomp or 0)
+# Expected headers in the sheet
+HEADERS = ["nom", "prenom", "email", "laboratoire", "accompagnants", "commentaire", "created_at"]
+
+# ------------------ Google Sheets helpers ------------------
+@st.cache_resource(show_spinner=False)
+def get_gsheet_client():
+    # Authenticate using the service account dict from secrets
+    sa_dict = st.secrets["gcp_service_account"]
+    gc = gspread.service_account_from_dict(sa_dict)
+    return gc
+
+@st.cache_resource(show_spinner=False)
+def get_worksheet():
+    gc = get_gsheet_client()
+    # Open spreadsheet by name
+    sh = gc.open(SHEET_NAME)
+    # Pick worksheet
+    if WORKSHEET_TITLE:
+        ws = sh.worksheet(WORKSHEET_TITLE)
+    else:
+        ws = sh.sheet1
+    # Ensure headers exist
+    values = ws.get_all_values()
+    if not values:
+        ws.append_row(HEADERS)
+    else:
+        # If headers present but not matching, ensure at least columns exist
+        if [h.strip().lower() for h in values[0]] != HEADERS:
+            # Try to set the first row to our headers (non-destructive if already in place)
+            ws.update('A1', [HEADERS])
+    return ws
+
+# Read entire sheet into DataFrame (excluding header row)
+def gsheet_to_df(ws) -> pd.DataFrame:
+    rows = ws.get_all_records()  # returns list of dicts, using first row as header
+    if not rows:
+        return pd.DataFrame(columns=HEADERS)
+    df = pd.DataFrame(rows)
+    # Normalize dtypes
+    if "accompagnants" in df.columns:
+        df["accompagnants"] = pd.to_numeric(df["accompagnants"], errors="coerce").fillna(0).astype(int)
+    return df
+
+# Append one inscription (values must follow HEADERS order)
+def append_inscription(ws, data: dict):
+    row = [data.get("nom",""), data.get("prenom",""), data.get("email",""),
+           data.get("laboratoire",""), int(data.get("accompagnants",0)),
+           data.get("commentaire",""), data.get("created_at","")]
+    ws.append_row(row)
+
+# ------------------ Business logic ------------------
+def get_places_stats(ws):
+    df = gsheet_to_df(ws)
+    count_inscrits = len(df)  # one row per salarié inscrit
+    sum_accomp = int(df["accompagnants"].sum()) if not df.empty else 0
+    total = count_inscrits + sum_accomp
     restantes = MAX_PLACES - total
     return max(total, 0), max(restantes, 0)
 
-def insert_inscription(nom, prenom, email, laboratoire, accompagnants, commentaire):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO inscriptions (nom, prenom, email, laboratoire, accompagnants, commentaire, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (nom, prenom, email, laboratoire, accompagnants, commentaire, datetime.now().isoformat(timespec="seconds")))
-    conn.commit()
-    conn.close()
-
-def fetch_all():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query(
-        "SELECT id, nom, prenom, email, laboratoire, accompagnants, commentaire, created_at "
-        "FROM inscriptions ORDER BY id DESC",
-        conn
-    )
-    conn.close()
-    return df
-
 # ------------------ UI ------------------
-init_db()
 st.set_page_config(page_title="Inscription Badminton", page_icon="🏸", layout="centered")
 
 st.title("🏸 Matinée Badminton – Inscription")
@@ -82,10 +101,18 @@ with colR:
     if IMG_FORM.exists():
         st.image(str(IMG_FORM), use_container_width=True, caption="Affiche")
 
+# Init worksheet resource once
+try:
+    WS = get_worksheet()
+except Exception as e:
+    st.error("Impossible d'accéder à Google Sheets. Vérifie les *secrets* et les droits de partage de la feuille avec le compte de service.")
+    st.exception(e)
+    st.stop()
+
 tab_inscription, tab_admin = st.tabs(["📝 S'inscrire", "🔐 Admin"])
 
 with tab_inscription:
-    total, restantes = get_places_stats()
+    total, restantes = get_places_stats(WS)
     st.markdown(f"**Places restantes : {restantes}**  _(capacité totale {MAX_PLACES})_")
     pct = int(100 * (MAX_PLACES - restantes) / MAX_PLACES)
     st.progress(pct, text=f"{MAX_PLACES - restantes}/{MAX_PLACES} places prises – {restantes} restantes")
@@ -103,8 +130,7 @@ with tab_inscription:
             prenom = st.text_input("Prénom*", value="")
             laboratoire = st.selectbox("Laboratoire*", LABS, index=0)
 
-        # Priorité aux salariés : on garde au moins 1 place pour la personne,
-        # donc on limite le nombre d'accompagnants au reste.
+        # Priorité aux salariés : au moins 1 place réservée pour la personne
         max_accomp = max(restantes - 1, 0)
         accompagnants = st.number_input(
             "Accompagnants (optionnel)",
@@ -120,8 +146,8 @@ with tab_inscription:
                 st.warning("Merci de remplir tous les champs obligatoires (*).")
                 st.stop()
 
-            # recalculer juste avant d’enregistrer pour éviter la course
-            _, r = get_places_stats()
+            # Recalcul juste avant écriture pour éviter contention
+            _, r = get_places_stats(WS)
             if r <= 0:
                 st.error("Désolé, c'est complet maintenant.")
                 st.stop()
@@ -129,13 +155,26 @@ with tab_inscription:
             max_accomp_now = max(r - 1, 0)
             accomp_enregistre = min(accompagnants, max_accomp_now)
 
-            insert_inscription(nom.strip(), prenom.strip(), email.strip(), laboratoire, int(accomp_enregistre), commentaire.strip())
-            if accomp_enregistre < accompagnants:
-                st.info(f"Inscription enregistrée. Les accompagnants ont été ajustés à {accomp_enregistre} en fonction des places restantes (priorité aux salariés).")
-            else:
-                st.success("Inscription enregistrée. À bientôt sur le terrain !")
-            st.toast("Inscription confirmée ✅")
-            st.balloons()
+            data = {
+                "nom": nom.strip(),
+                "prenom": prenom.strip(),
+                "email": email.strip(),
+                "laboratoire": laboratoire,
+                "accompagnants": int(accomp_enregistre),
+                "commentaire": commentaire.strip(),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            try:
+                append_inscription(WS, data)
+                if accomp_enregistre < accompagnants:
+                    st.info(f"Inscription enregistrée. Les accompagnants ont été ajustés à {accomp_enregistre} en fonction des places restantes (priorité aux salariés).")
+                else:
+                    st.success("Inscription enregistrée. À bientôt sur le terrain !")
+                st.toast("Inscription confirmée ✅")
+                st.balloons()
+            except Exception as e:
+                st.error("Échec de l'enregistrement dans Google Sheets. Vérifie les droits/quotas.")
+                st.exception(e)
 
     with st.expander("🗺️ Plan & Accès"):
         if IMG_PLAN.exists():
@@ -160,15 +199,15 @@ with tab_admin:
             else:
                 st.error("Mot de passe incorrect.")
     else:
-        df = fetch_all()
-        total, restantes = get_places_stats()
+        df = gsheet_to_df(WS)
+        total, restantes = get_places_stats(WS)
         k1, k2, k3 = st.columns(3)
         k1.metric("Capacité", MAX_PLACES)
         k2.metric("Places prises", MAX_PLACES - restantes)
         k3.metric("Restantes", restantes)
 
         lab_filter = st.multiselect("Filtrer par laboratoire", LABS, [])
-        if lab_filter:
+        if lab_filter and not df.empty:
             df = df[df["laboratoire"].isin(lab_filter)]
 
         st.dataframe(df, use_container_width=True, hide_index=True)
