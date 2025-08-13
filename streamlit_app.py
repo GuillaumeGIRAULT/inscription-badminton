@@ -13,7 +13,7 @@ IMG_PLAN = STATIC_DIR / "plan.png"
 IMG_ACCES = STATIC_DIR / "acces.png"
 
 # Admin password: can be overridden via Streamlit Secrets
-ADMIN_PASSWORD = st.secrets.get("admin_password", "admin123")
+ADMIN_PASSWORD = st.secrets.get("admin_password", "jD9!wX4@Lm82Qz")
 
 # Google Sheets configuration via Secrets
 # In Streamlit Cloud → Settings → Secrets, define:
