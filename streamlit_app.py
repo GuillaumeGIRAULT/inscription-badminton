@@ -2,14 +2,7 @@ from datetime import datetime, date
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-
 import gspread
-
-# --- Optional: auto-refresh helper ---
-try:
-    from streamlit_autorefresh import st_autorefresh
-except Exception:
-    st_autorefresh = None
 
 # ------------------ Config ------------------
 MAX_PLACES = 50
@@ -95,17 +88,6 @@ def get_places_stats(ws):
 st.set_page_config(page_title="Inscription Badminton", page_icon="🏸", layout="centered")
 
 st.title("🏸 Matinée Badminton – Inscription")
-
-# --- Auto-refresh (15s), can be disabled from the sidebar ---
-AUTO_REFRESH_MS = 15000
-with st.sidebar:
-    auto = st.toggle("Actualisation auto (15 s)", value=True)
-if auto:
-    if st_autorefresh:
-        st_autorefresh(interval=AUTO_REFRESH_MS, key="auto_refresh_key")
-    else:
-        # Fallback without extra dependency (simple meta refresh)
-        st.markdown("<meta http-equiv='refresh' content='15'>", unsafe_allow_html=True)
 
 colL, colR = st.columns([2,1])
 with colL:
