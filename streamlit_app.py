@@ -1,5 +1,4 @@
-# streamlit_app.py — Google Sheets version
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -117,6 +116,13 @@ with tab_inscription:
     pct = int(100 * (MAX_PLACES - restantes) / MAX_PLACES)
     st.progress(pct, text=f"{MAX_PLACES - restantes}/{MAX_PLACES} places prises – {restantes} restantes")
 
+    # Ouverture des accompagnants à partir du 01/09/2025
+    OPEN_DATE = date(2025, 9, 1)
+    today = date.today()
+    accomp_open = today >= OPEN_DATE
+    if not accomp_open:
+        st.info("ℹ️ Les accompagnants seront **ouverts à partir du 01/09/2025**. Les salariés peuvent s’inscrire dès maintenant.")
+
     if restantes <= 0:
         st.error("Complet – il n'y a plus de places disponibles.")
         st.stop()
@@ -130,13 +136,16 @@ with tab_inscription:
             prenom = st.text_input("Prénom*", value="")
             laboratoire = st.selectbox("Laboratoire*", LABS, index=0)
 
-        # Priorité aux salariés : au moins 1 place réservée pour la personne
-        max_accomp = max(restantes - 1, 0)
-        accompagnants = st.number_input(
-            "Accompagnants (optionnel)",
-            min_value=0, max_value=int(max_accomp), value=0, step=1,
-            help="Priorité aux salariés : les accompagnants sont limités selon les places restantes."
-        )
+        # Priorité aux salariés : accompagnants ouverts seulement à partir du 01/09/2025
+        if accomp_open:
+            max_accomp = max(restantes - 1, 0)
+            accompagnants = st.number_input(
+                "Accompagnants (optionnel)",
+                min_value=0, max_value=int(max_accomp), value=0, step=1,
+                help="Priorité aux salariés : les accompagnants sont limités selon les places restantes."
+            )
+        else:
+            accompagnants = 0  # champ caché/forcé à 0 avant ouverture
 
         commentaire = st.text_area("Commentaire", value="", height=80, placeholder="Allergies, niveau débutant, préférences…")
         submitted = st.form_submit_button("S'inscrire")
@@ -209,6 +218,34 @@ with tab_admin:
         lab_filter = st.multiselect("Filtrer par laboratoire", LABS, [])
         if lab_filter and not df.empty:
             df = df[df["laboratoire"].isin(lab_filter)]
+
+        # --- Analytics par laboratoire ---
+        if df.empty:
+            st.info("Aucune inscription pour le moment.")
+        else:
+            # Calcul par labo
+            agg = (
+                df.groupby("laboratoire", dropna=False)
+                  .agg(inscrits=("laboratoire", "size"), accompagnants=("accompagnants", "sum"))
+                  .reset_index()
+            )
+            agg["inscrits"] = agg["inscrits"].fillna(0).astype(int)
+            agg["accompagnants"] = agg["accompagnants"].fillna(0).astype(int)
+            agg["total"] = agg["inscrits"] + agg["accompagnants"]
+
+            # S'assurer que tous les LABS apparaissent, même à 0
+            full = pd.DataFrame({"laboratoire": LABS})
+            agg = full.merge(agg, on="laboratoire", how="left").fillna(0)
+            for col in ["inscrits", "accompagnants", "total"]:
+                agg[col] = agg[col].astype(int)
+
+            st.subheader("Répartition par laboratoire")
+            metric = st.radio("Choisir l'indicateur à afficher", ["inscrits", "accompagnants", "total"], index=2, horizontal=True)
+            chart_df = agg.set_index("laboratoire")[[metric]]
+            st.bar_chart(chart_df)
+
+            with st.expander("Détails par laboratoire"):
+                st.dataframe(agg.rename(columns={"inscrits":"Inscrits","accompagnants":"Accompagnants","total":"Total (avec accompagnants)"}), use_container_width=True, hide_index=True)
 
         st.dataframe(df, use_container_width=True, hide_index=True)
 
